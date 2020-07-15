@@ -1,3 +1,4 @@
+import deepEqual from 'fast-deep-equal'
 import isDocumentVisible from './libs/is-document-visible'
 import isOnline from './libs/is-online'
 import {
@@ -5,21 +6,10 @@ import {
   RevalidateOptionInterface,
   revalidateType
 } from './types'
+import Cache from './cache'
 
-// Cache
-const __cache = new Map()
-
-function cacheGet(key: string): any {
-  return __cache.get(key)
-}
-
-function cacheSet(key: string, value: any) {
-  return __cache.set(key, value)
-}
-
-function cacheClear() {
-  __cache.clear()
-}
+// cache
+const cache = new Cache()
 
 // state managers
 const CONCURRENT_PROMISES = {}
@@ -27,6 +17,7 @@ const CONCURRENT_PROMISES_TS = {}
 const FOCUS_REVALIDATORS = {}
 const CACHE_REVALIDATORS = {}
 const MUTATION_TS = {}
+const MUTATION_END_TS = {}
 
 // error retry
 function onErrorRetry(
@@ -39,6 +30,13 @@ function onErrorRetry(
   if (!isDocumentVisible()) {
     // if it's hidden, stop
     // it will auto revalidate when focus
+    return
+  }
+
+  if (
+    typeof config.errorRetryCount === 'number' &&
+    opts.retryCount > config.errorRetryCount
+  ) {
     return
   }
 
@@ -76,7 +74,8 @@ const defaultConfig: ConfigInterface = {
   refreshWhenHidden: false,
   refreshWhenOffline: false,
   shouldRetryOnError: true,
-  suspense: false
+  suspense: false,
+  compare: deepEqual
 }
 
 // Focus revalidate
@@ -101,8 +100,7 @@ export {
   FOCUS_REVALIDATORS,
   CACHE_REVALIDATORS,
   MUTATION_TS,
-  cacheGet,
-  cacheSet,
-  cacheClear
+  MUTATION_END_TS,
+  cache
 }
 export default defaultConfig

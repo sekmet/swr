@@ -1,9 +1,12 @@
-[![SWR](https://assets.zeit.co/image/upload/v1572289618/swr/banner.png)](https://swr.now.sh)
+[![SWR](https://assets.vercel.com/image/upload/v1572289618/swr/banner.png)](https://swr.vercel.app)
 
 <p align="center">
-  <a aria-label="ZEIT logo" href="https://github.com/zeit">
-    <img src="https://badgen.net/badge/icon/MADE%20BY%20ZEIT?icon=zeit&label&color=black&labelColor=black">
+
+  <a aria-label="Vercel logo" href="https://vercel.com">
+    <img src="https://badgen.net/badge/icon/Made%20by%20Vercel?icon=zeit&label&color=black&labelColor=black">
   </a>
+  <br/>
+  
   <a aria-label="NPM version" href="https://www.npmjs.com/package/swr">
     <img alt="" src="https://badgen.net/npm/v/swr">
   </a>
@@ -17,7 +20,7 @@
 
 ## Introduction
 
-[swr.now.sh](https://swr.now.sh)
+[swr.vercel.app](https://swr.vercel.app)
 
 SWR is a React Hooks library for remote data fetching.
 
@@ -29,6 +32,7 @@ It features:
 - Fast page navigation
 - Revalidation on focus
 - Interval polling
+- Request deduplication
 - Local mutation
 - Pagination
 - TypeScript ready
@@ -58,7 +62,7 @@ function Profile () {
 ```
 
 In this example, the React Hook `useSWR` accepts a `key` and a `fetcher` function.
-`key` is a unique identifier of the request, normally the URL of the API. And the `fetcher` accepts
+The `key` is a unique identifier of the request, normally the URL of the API. And the `fetcher` accepts
 `key` as its parameter and returns the data asynchronously.
 
 `useSWR` also returns 2 values: `data` and `error`. When the request (fetcher) is not yet finished,
@@ -68,7 +72,7 @@ of `fetcher` and rerenders the component.
 Note that `fetcher` can be any asynchronous function, so you can use your favourite data-fetching
 library to handle that part.
 
-Check out [swr.now.sh](https://swr.now.sh) for more demos of SWR, and [Examples](#examples) for the best practices.
+Check out [swr.vercel.app](https://swr.vercel.app) for more demos of SWR, and [Examples](#examples) for the best practices.
 
 <br/>
 
@@ -89,7 +93,7 @@ npm install swr
 ### API
 
 ```js
-const { data, error, isValidating, revalidate } = useSWR(key, fetcher, options)
+const { data, error, isValidating, mutate } = useSWR(key, fetcher, options)
 ```
 
 #### Parameters
@@ -102,13 +106,14 @@ const { data, error, isValidating, revalidate } = useSWR(key, fetcher, options)
 - `data`: data for the given key resolved by `fetcher` (or undefined if not loaded)  
 - `error`: error thrown by `fetcher` (or undefined)  
 - `isValidating`: if there's a request or revalidation loading  
-- `revalidate`: function to trigger the validation manually
+- `mutate(data?, shouldRevalidate?)`: function to mutate the cached data
 
 #### Options
 
 - `suspense = false`: enable React Suspense mode [(details)](#suspense-mode)
 - `fetcher = undefined`: the default fetcher function
 - `initialData`: initial data to be returned (note: This is per-hook)
+- `revalidateOnMount`: enable or disable automatic revalidation when component is mounted (by default revalidation occurs on mount when initialData is not set, use this flag to force behavior)
 - `revalidateOnFocus = true`: auto revalidate when window gets focused
 - `revalidateOnReconnect = true`: automatically revalidate when the browser regains a network connection (via `navigator.onLine`)
 - `refreshInterval = 0`: polling interval (disabled by default)
@@ -119,15 +124,17 @@ const { data, error, isValidating, revalidate } = useSWR(key, fetcher, options)
 - `focusThrottleInterval = 5000`: only revalidate once during a time span
 - `loadingTimeout = 3000`: timeout to trigger the onLoadingSlow event
 - `errorRetryInterval = 5000`: error retry interval [(details)](#error-retries)
-- `onLoadingSlow`: callback function when a request takes too long to load (see `loadingTimeout`)
-- `onSuccess`: callback function when a request finishes successfully
-- `onError`: callback function when a request returns an error
-- `onErrorRetry`: handler for [error retry](#error-retries)
+- `errorRetryCount`: max error retry count [(details)](#error-retries)
+- `onLoadingSlow(key, config)`: callback function when a request takes too long to load (see `loadingTimeout`)
+- `onSuccess(data, key, config)`: callback function when a request finishes successfully
+- `onError(err, key, config)`: callback function when a request returns an error
+- `onErrorRetry(err, key, config, revalidate, revalidateOps)`: handler for [error retry](#error-retries)
+- `compare(a, b)`: comparison function used to detect when returned data has changed, to avoid spurious rerenders. By default, [fast-deep-equal](https://github.com/epoberezkin/fast-deep-equal) is used.
 
 When under a slow network (2G, <= 70Kbps), `errorRetryInterval` will be 10s, and
 `loadingTimeout` will be 5s by default.
 
-You can also use [global configuration](#global-configuration) to provide default options.
+You can also use a [global configuration](#global-configuration) to provide default options.
 
 <br/>
 
@@ -140,6 +147,8 @@ You can also use [global configuration](#global-configuration) to provide defaul
 - [Multiple Arguments](#multiple-arguments)
 - [Manually Revalidate](#manually-revalidate)
 - [Mutation and Post Request](#mutation-and-post-request)
+- [Mutate Based on Current Data](#mutate-based-on-current-data)
+- [Returned Data from Mutate](#returned-data-from-mutate)
 - [SSR with Next.js](#ssr-with-nextjs)
 - [Suspense Mode](#suspense-mode)
 - [Error Retries](#error-retries)
@@ -241,10 +250,11 @@ SWR also allows you to fetch data that depends on other data. It ensures the max
 function MyProjects () {
   const { data: user } = useSWR('/api/user')
   const { data: projects } = useSWR(() => '/api/projects?uid=' + user.id)
-  // When passing a function, SWR will use the
-  // return value as `key`. If the function throws,
-  // SWR will know that some dependencies are not
-  // ready. In this case it is `user`.
+  // When passing a function, SWR will use the return
+  // value as `key`. If the function throws or returns
+  // falsy, SWR will know that some dependencies are not
+  // ready. In this case `user.id` throws when `user`
+  // isn't loaded.
 
   if (!projects) return 'loading...'
   return 'You have ' + projects.length + ' projects'
@@ -253,7 +263,7 @@ function MyProjects () {
 
 ### Multiple Arguments
 
-In some scenarios, it's useful pass multiple arguments (can be any value or object) to the `fetcher` function. For example:
+In some scenarios, it's useful to pass multiple arguments (can be any value or object) to the `fetcher` function. For example:
 
 ```js
 useSWR('/api/user', url => fetchWithToken(url, token))
@@ -272,7 +282,7 @@ const { data: orders } = useSWR(user ? ['/api/orders', user] : null, fetchWithUs
 ```
 
 The key of the request is now the combination of both values. SWR **shallowly** compares
-the arguments on every render, and triggers revalidation if any of them has changed.  
+the arguments on every render and triggers revalidation if any of them has changed.  
 Keep in mind that you should not recreate objects when rendering, as they will be treated as different objects on every render:
 
 ```js
@@ -288,13 +298,13 @@ Dan Abramov explains dependencies very well in [this blog post](https://overreac
 ### Manually Revalidate
 
 You can broadcast a revalidation message globally to all SWRs with the same key by calling
-`trigger(key)`.
+`mutate(key)`.
 
 This example shows how to automatically refetch the login info (e.g.: inside `<Profile/>`) 
 when the user clicks the “Logout” button.
 
 ```js
-import useSWR, { trigger } from 'swr'
+import useSWR, { mutate } from 'swr'
 
 function App () {
   return (
@@ -305,7 +315,7 @@ function App () {
         document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
 
         // tell all SWRs with this key to revalidate
-        trigger('/api/user')
+        mutate('/api/user')
       }}>
         Logout
       </button>
@@ -336,6 +346,7 @@ function Profile () {
         // send a request to the API to update the data
         await requestUpdateUsername(newName)
         // update the local data immediately and revalidate (refetch)
+        // NOTE: key has to be passed to mutate as it's not bound
         mutate('/api/user', { ...data, name: newName })
       }}>Uppercase my name!</button>
     </div>
@@ -355,15 +366,70 @@ mutate('/api/user', updateUser(newUser)) // `updateUser` is a Promise of the req
                                          // which returns the updated document
 ```
 
+### Mutate Based on Current Data
+
+In many cases, you are receiving a single value back from your API and want to update a list of them.
+
+With `mutate`, you can pass an async function which will receive the current cached value, if any, and let you return an updated document.
+
+```js
+mutate('/api/users', async users => {
+  const user = await fetcher('/api/users/1')
+  return [user, ...users.slice(1)]
+})
+```
+
+### Returned Data from Mutate
+
+Most probably, you need some data to update the cache. The data is resolved or returned from the promise or async function you passed to `mutate`.
+
+The function will return an updated document to let `mutate` update the corresponding cache value. It could throw an error somehow, every time when you call it.
+
+```js
+try {
+  const user = await mutate('/api/user', updateUser(newUser))
+} catch (error) {
+  // Handle an error while updating the user here
+}
+```
+
+### Bound `mutate()`
+
+The SWR object returned by `useSWR` also contains a `mutate()` function that is pre-bound to the SWR's key.
+
+It is functionally equivalent to the global `mutate` function but does not require the `key` parameter.
+
+```js
+import useSWR from 'swr'
+
+function Profile () {
+  const { data, mutate } = useSWR('/api/user', fetcher)
+
+  return (
+    <div>
+      <h1>My name is {data.name}.</h1>
+      <button onClick={async () => {
+        const newName = data.name.toUpperCase()
+        // send a request to the API to update the data
+        await requestUpdateUsername(newName)
+        // update the local data immediately and revalidate (refetch)
+        // NOTE: key is not required when using useSWR's mutate as it's pre-bound
+        mutate({ ...data, name: newName })
+      }}>Uppercase my name!</button>
+    </div>
+  )
+}
+```
+
 ### SSR with Next.js
 
 With the `initialData` option, you pass an initial value to the hook. It works perfectly with many SSR solutions
-such as `getInitialProps` in [Next.js](https://github.com/zeit/next.js):
+such as `getServerSideProps` in [Next.js](https://github.com/zeit/next.js):
 
 ```js
-App.getInitialProps = async () => {
+export async function getServerSideProps() {
   const data = await fetcher('/api/data')
-  return { data }
+  return { props: { data } }
 }
 
 function App (props) {
@@ -374,7 +440,7 @@ function App (props) {
 }
 ```
 
-It is still a server-side rendered site, but it’s also fully powered by SWR in the client side. 
+It is still a server-side rendered site, but it’s also fully powered by SWR in the client-side. 
 Which means the data can be dynamic and update itself over time and user interactions.
 
 ### Suspense Mode
@@ -425,7 +491,7 @@ useSWR(key, fetcher, {
 
 ### Prefetching Data
 
-There’re many ways to prefetch the data for SWR. For top level requests, [`rel="preload"`](https://developer.mozilla.org/en-US/docs/Web/HTML/Preloading_content) is highly recommended:
+There’re many ways to prefetch the data for SWR. For top-level requests, [`rel="preload"`](https://developer.mozilla.org/en-US/docs/Web/HTML/Preloading_content) is highly recommended:
 
 ```html
 <link rel="preload" href="/api/data" as="fetch" crossorigin="anonymous">
@@ -449,10 +515,10 @@ Together with techniques like [page prefetching](https://nextjs.org/docs#prefetc
 <br/>
 
 ## Authors
-- Shu Ding ([@shuding_](https://twitter.com/shuding_)) – [ZEIT](https://zeit.co)
-- Guillermo Rauch ([@rauchg](https://twitter.com/rauchg)) – [ZEIT](https://zeit.co)
-- Joe Haddad ([@timer150](https://twitter.com/timer150)) - [ZEIT](https://zeit.co)
-- Paco Coursey ([@pacocoursey](https://twitter.com/pacocoursey)) - [ZEIT](https://zeit.co)
+- Shu Ding ([@shuding_](https://twitter.com/shuding_)) – [Vercel](https://vercel.com)
+- Guillermo Rauch ([@rauchg](https://twitter.com/rauchg)) – [Vercel](https://vercel.com)
+- Joe Haddad ([@timer150](https://twitter.com/timer150)) - [Vercel](https://vercel.com)
+- Paco Coursey ([@pacocoursey](https://twitter.com/pacocoursey)) - [Vercel](https://vercel.com)
 
 Thanks to Ryan Chen for providing the awesome `swr` npm package name!
 
